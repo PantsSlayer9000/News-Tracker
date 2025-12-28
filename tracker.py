@@ -9,7 +9,7 @@ import requests
 OUT_FILE = "pinknews.json"
 STATE_FILE = "pink_state.json"
 
-LOOKBACK_YEARS = 5
+LOOKBACK_YEARS = 1
 MAX_ITEMS = 300
 MAX_ITEMS_PER_QUERY = 80
 

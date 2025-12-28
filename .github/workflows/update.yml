@@ -24,7 +24,7 @@ jobs:
 
       - name: Run tracker
         run: |
-          python tracker.py
+          python -u tracker.py
 
       - name: Commit and push if changed
         run: |

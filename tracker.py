@@ -1,254 +1,284 @@
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    html, body { height: 100%; margin: 0; padding: 0; background: transparent; overflow: hidden; }
-    body{
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
-      color: #0f172a;
-      line-height: 1.45;
-    }
-    .wrap{ height: 100%; padding: 14px; box-sizing: border-box; }
-    .panel{
-      height: 100%;
-      display: flex;
-      flex-direction: column;
-      background: rgba(255,255,255,0.86);
-      border: 1px solid rgba(15, 23, 42, 0.10);
-      border-radius: 18px;
-      box-shadow: 0 14px 30px rgba(15, 23, 42, 0.10);
-      overflow: hidden;
-    }
-    .header{ padding: 14px; border-bottom: 1px solid rgba(15, 23, 42, 0.08); }
-    .controls{ display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
-    .control{ flex: 1; min-width: 240px; }
-    .control.small{ flex: 0; min-width: 200px; }
-    .control.btn{ flex: 0; min-width: 140px; }
-    .label{ font-size: 12px; color: rgba(15, 23, 42, 0.65); margin: 0 0 6px 0; }
-    input, select, button{
-      width: 100%;
-      box-sizing: border-box;
-      border: 1px solid rgba(15, 23, 42, 0.12);
-      border-radius: 12px;
-      padding: 10px 12px;
-      font-size: 14px;
-      background: rgba(255,255,255,0.92);
-      color: #0f172a;
-      outline: none;
-    }
-    button{
-      background: #0f172a;
-      color: #ffffff;
-      border: 1px solid #0f172a;
-      font-weight: 700;
-      cursor: pointer;
-    }
-    .status{ margin-top: 10px; font-size: 13px; color: rgba(15, 23, 42, 0.65); }
-    .list{ flex: 1; overflow: auto; padding: 12px 14px 14px 14px; box-sizing: border-box; }
-    .card{
-      background: rgba(255,255,255,0.94);
-      border: 1px solid rgba(15, 23, 42, 0.10);
-      border-radius: 14px;
-      padding: 14px;
-      margin-bottom: 12px;
-    }
-    .meta{
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      align-items: center;
-      margin-bottom: 8px;
-      font-size: 12px;
-      color: rgba(15, 23, 42, 0.62);
-    }
-    .pill{
-      display: inline-block;
-      padding: 4px 10px;
-      border-radius: 999px;
-      border: 1px solid rgba(15, 23, 42, 0.12);
-      background: rgba(15, 23, 42, 0.03);
-      color: #0f172a;
-      font-weight: 700;
-      font-size: 12px;
-    }
-    .title{ margin: 0; font-size: 16px; font-weight: 800; }
-    .title a{ color: #0f172a; text-decoration: none; }
-    .title a:hover{ text-decoration: underline; }
-    .summary{ margin: 8px 0 0 0; font-size: 14px; color: rgba(15, 23, 42, 0.90); }
-    .linkbtn{
-      display: inline-block;
-      margin-top: 10px;
-      padding: 8px 10px;
-      border-radius: 10px;
-      border: 1px solid rgba(15, 23, 42, 0.12);
-      background: rgba(255,255,255,0.92);
-      color: #0f172a;
-      text-decoration: none;
-      font-weight: 700;
-      font-size: 13px;
-    }
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <div class="panel">
-      <div class="header">
-        <div class="controls">
-          <div class="control">
-            <div class="label">Search</div>
-            <input id="q" placeholder="Search updates" />
-          </div>
-          <div class="control small">
-            <div class="label">Area</div>
-            <select id="area"></select>
-          </div>
-          <div class="control small">
-            <div class="label">Type</div>
-            <select id="type"></select>
-          </div>
-          <div class="control btn">
-            <div class="label">&nbsp;</div>
-            <button id="reload" type="button">Reload</button>
-          </div>
-        </div>
-        <div id="status" class="status">Loading updates...</div>
-      </div>
-      <div id="list" class="list"></div>
-    </div>
-  </div>
+import json
+import re
+import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta, timezone
+from urllib.parse import urlencode
 
-  <script>
-    var FEED_URL = "https://raw.githubusercontent.com/PantsSlayer9000/News-Tracker/main/pinknews.json";
+import requests
 
-    function esc(s){
-      return String(s || "").replace(/[&<>"']/g, function(c){
-        return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c];
-      });
-    }
+OUT_FILE = "pinknews.json"
+STATE_FILE = "pink_state.json"
 
-    function formatDateDMY(isoDate){
-      if (!isoDate) return "Date not listed";
-      var d = new Date(isoDate + "T00:00:00Z");
-      if (isNaN(d.getTime())) return "Date not listed";
-      return new Intl.DateTimeFormat("en-GB", { day:"2-digit", month:"long", year:"numeric" }).format(d);
-    }
+LOOKBACK_YEARS = 5
+MAX_ITEMS = 250
+MAX_ITEMS_PER_QUERY = 60
 
-    function clean(s){
-      return String(s || "").replace(/\s+/g, " ").trim();
-    }
+GOOGLE_NEWS_RSS = "https://news.google.com/rss/search"
 
-    var allItems = [];
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+    "Accept": "application/rss+xml, application/xml;q=0.9, */*;q=0.8",
+    "Accept-Language": "en-GB,en;q=0.9",
+}
 
-    function buildDropdown(id, values, firstLabel){
-      var sel = document.getElementById(id);
-      sel.innerHTML = "";
-      var opt0 = document.createElement("option");
-      opt0.value = "";
-      opt0.textContent = firstLabel;
-      sel.appendChild(opt0);
-      values.forEach(function(v){
-        var o = document.createElement("option");
-        o.value = v;
-        o.textContent = v;
-        sel.appendChild(o);
-      });
-    }
+AREA_NAMES = [
+    "Ashford", "Broadstairs", "Canterbury", "Chatham", "Dartford", "Deal", "Dover",
+    "Faversham", "Folkestone", "Gillingham", "Gravesend", "Herne Bay", "Hythe",
+    "Isle of Sheppey", "Maidstone", "Margate", "Medway", "Ramsgate", "Rochester",
+    "Sevenoaks", "Sheerness", "Sheppey", "Sittingbourne", "Swale", "Thanet",
+    "Tonbridge", "Tunbridge Wells", "Whitstable",
+]
 
-    function render(){
-      var q = (document.getElementById("q").value || "").trim().toLowerCase();
-      var area = document.getElementById("area").value;
-      var type = document.getElementById("type").value;
+AREA_PATTERNS = [
+    (name, re.compile(r"\b" + re.escape(name.lower()) + r"\b", re.I))
+    for name in AREA_NAMES
+] + [
+    ("Herne Bay", re.compile(r"\bherne\s+bay\b", re.I)),
+    ("Tunbridge Wells", re.compile(r"\btunbridge\s+wells\b", re.I)),
+    ("Isle of Sheppey", re.compile(r"\bisle\s+of\s+sheppey\b", re.I)),
+]
 
-      var filtered = allItems.filter(function(it){
-        if (area && (it.area || "") !== area) return false;
-        if (type && (it.label || "") !== type) return false;
-        if (!q) return true;
-        var t = ((it.title||"") + " " + (it.summary||"") + " " + (it.source||"") + " " + (it.area||"") + " " + (it.label||"")).toLowerCase();
-        return t.indexOf(q) !== -1;
-      });
+BLOCK_TERMS = [
+    "kent state",
+    "kent state university",
+    "kent, ohio",
+    "ohio",
+    "usa",
+    "u.s.",
+    "united states",
+]
 
-      var status = document.getElementById("status");
-      var list = document.getElementById("list");
+TOPIC_TERMS = [
+    "lgbt", "lgbtq", "lgbtq+", "lgbtqia", "lgbtqia+",
+    "gay", "lesbian", "bisexual", "trans", "transgender",
+    "non-binary", "non binary", "nonbinary",
+    "homophobic", "homophobia",
+    "transphobic", "transphobia",
+    "biphobic", "biphobia",
+    "hate crime", "hate-crime", "hatecrime",
+    "sexual orientation", "gender identity",
+    "pride",
+]
 
-      if (!allItems.length){
-        status.textContent = "No updates yet.";
-        list.innerHTML = "";
-        return;
-      }
+COURT_TERMS = [
+    "court", "crown court", "magistrates", "sentenced", "sentence",
+    "pleaded guilty", "pleaded", "charged", "convicted", "judge",
+    "hearing", "trial", "appeal", "prosecuted",
+]
 
-      if (!filtered.length){
-        status.textContent = "No matching updates.";
-        list.innerHTML = "";
-        return;
-      }
+HATE_TERMS = [
+    "hate crime", "hate-crime", "hatecrime",
+    "homophobic", "homophobia",
+    "transphobic", "transphobia",
+    "biphobic", "biphobia",
+]
 
-      status.textContent = filtered.length + " update" + (filtered.length === 1 ? "" : "s") + " shown.";
+def load_json(path: str, fallback):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return fallback
 
-      var out = "";
-      var max = 40;
+def save_json(path: str, data) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
-      for (var i = 0; i < filtered.length && i < max; i++){
-        var it = filtered[i];
-        var title = clean(it.title || "Untitled");
-        var summary = clean(it.summary || "");
-        var source = clean(it.source || "Source");
-        var label = clean(it.label || "Update");
-        var a = clean(it.area || "");
-        var date = formatDateDMY(it.published);
-        var url = it.url || "#";
+def strip_html(s: str) -> str:
+    s = re.sub(r"<[^>]+>", " ", s or "")
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
 
-        out += ""
-          + "<div class='card'>"
-          +   "<div class='meta'>"
-          +     "<span class='pill'>" + esc(label) + "</span>"
-          +     (a ? "<span class='pill'>" + esc(a) + "</span>" : "")
-          +     "<span>" + esc(source) + "</span>"
-          +     "<span>" + esc(date) + "</span>"
-          +   "</div>"
-          +   "<div class='title'><a href='" + esc(url) + "' target='_blank' rel='noopener'>" + esc(title) + "</a></div>"
-          +   (summary ? "<div class='summary'>" + esc(summary) + "</div>" : "")
-          +   "<a class='linkbtn' href='" + esc(url) + "' target='_blank' rel='noopener'>Open source</a>"
-          + "</div>";
-      }
+def parse_rss_date(pub_date: str):
+    if not pub_date:
+        return None
+    pub_date = pub_date.strip()
+    fmts = [
+        "%a, %d %b %Y %H:%M:%S %Z",
+        "%a, %d %b %Y %H:%M:%S %z",
+    ]
+    for fmt in fmts:
+        try:
+            dt = datetime.strptime(pub_date, fmt)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc)
+        except Exception:
+            continue
+    return None
 
-      list.innerHTML = out;
-    }
+def build_google_rss_url(q: str) -> str:
+    params = {"q": q, "hl": "en-GB", "gl": "GB", "ceid": "GB:en"}
+    return GOOGLE_NEWS_RSS + "?" + urlencode(params)
 
-    function load(){
-      document.getElementById("status").textContent = "Loading updates...";
-      document.getElementById("list").innerHTML = "";
+def fetch_rss(q: str):
+    url = build_google_rss_url(q)
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=30)
+        if r.status_code >= 400:
+            print("RSS fetch failed", r.status_code, "for query:", q)
+            return None
+        return r.text
+    except Exception as e:
+        print("RSS fetch error", str(e), "for query:", q)
+        return None
 
-      fetch(FEED_URL + "?t=" + Date.now(), { cache: "no-store" })
-        .then(function(r){ if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
-        .then(function(items){
-          allItems = Array.isArray(items) ? items : [];
-          var areas = {};
-          var types = {};
+def rss_items(xml_text: str):
+    out = []
+    try:
+        root = ET.fromstring(xml_text)
+    except Exception:
+        return out
 
-          allItems.forEach(function(it){
-            if (it.area) areas[it.area] = true;
-            if (it.label) types[it.label] = true;
-          });
+    for item in root.findall(".//item"):
+        title = (item.findtext("title") or "").strip()
+        link = (item.findtext("link") or "").strip()
+        pub_date = (item.findtext("pubDate") or "").strip()
+        desc = strip_html(item.findtext("description") or "")
 
-          buildDropdown("area", Object.keys(areas).sort(), "All areas");
-          buildDropdown("type", Object.keys(types).sort(), "All types");
+        source_elem = item.find("source")
+        source_name = ""
+        source_url = ""
+        if source_elem is not None:
+            source_name = (source_elem.text or "").strip()
+            source_url = (source_elem.attrib.get("url") or "").strip()
 
-          render();
+        dt = parse_rss_date(pub_date)
+        published = dt.date().isoformat() if dt else None
+
+        out.append({
+            "title": title,
+            "url": link,
+            "published": published,
+            "source": source_name if source_name else "Google News",
+            "source_url": source_url,
+            "summary": desc[:500] if desc else "",
         })
-        .catch(function(err){
-          document.getElementById("status").textContent = "Could not load updates. " + (err && err.message ? err.message : "Unknown error");
-        });
-    }
+    return out
 
-    document.getElementById("q").addEventListener("input", render);
-    document.getElementById("area").addEventListener("change", render);
-    document.getElementById("type").addEventListener("change", render);
-    document.getElementById("reload").addEventListener("click", load);
+def find_area(text: str) -> str:
+    t = (text or "").lower()
+    if "sheppey" in t:
+        if "isle of sheppey" in t:
+            return "Isle of Sheppey"
+        return "Sheppey"
+    for name, pat in AREA_PATTERNS:
+        if pat.search(t):
+            return name
+    return ""
 
-    load();
-    setInterval(load, 30 * 60 * 1000);
-  </script>
-</body>
-</html>
+def looks_like_kent(text: str) -> bool:
+    t = (text or "").lower()
+    if any(b in t for b in BLOCK_TERMS):
+        return False
+    if "kent" in t:
+        return True
+    if find_area(t):
+        return True
+    return False
+
+def has_topic_signal(text: str) -> bool:
+    t = (text or "").lower()
+    return any(k in t for k in TOPIC_TERMS)
+
+def classify_label(text: str) -> str:
+    t = (text or "").lower()
+    if any(k in t for k in HATE_TERMS):
+        return "Hate crime update"
+    if any(k in t for k in COURT_TERMS):
+        return "Court update"
+    if "pride" in t:
+        return "Pride update"
+    return "LGBT news"
+
+def build_queries():
+    neg = '-"Kent State" -Ohio -USA -"United States"'
+    topic_blob = '(lgbt OR lgbtq OR gay OR lesbian OR bisexual OR trans OR transgender OR "non-binary" OR homophobic OR transphobic OR "hate crime" OR pride)'
+    court_blob = '(court OR "crown court" OR magistrates OR sentenced OR "pleaded guilty" OR convicted OR charged)'
+    hate_blob = '(homophobic OR transphobic OR "hate crime" OR hatecrime)'
+
+    queries = []
+
+    queries.append(f'kent uk {topic_blob} {neg}')
+    queries.append(f'kent uk {hate_blob} {neg}')
+    queries.append(f'kent uk {court_blob} {hate_blob} {neg}')
+    queries.append(f'kent uk pride lgbt {neg}')
+
+    for area in AREA_NAMES:
+        a = f'"{area}"'
+        queries.append(f'{a} kent uk {topic_blob} {neg}')
+        queries.append(f'{a} kent uk {hate_blob} {neg}')
+        queries.append(f'{a} kent uk {court_blob} {neg}')
+
+    seen = set()
+    out = []
+    for q in queries:
+        if q not in seen:
+            out.append(q)
+            seen.add(q)
+    return out
+
+def main() -> None:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=365 * LOOKBACK_YEARS)
+
+    state = load_json(STATE_FILE, {"seen_urls": []})
+    seen_urls = set(state.get("seen_urls", []))
+
+    queries = build_queries()
+    collected = []
+    scanned = 0
+
+    for q in queries:
+        xml_text = fetch_rss(q)
+        if not xml_text:
+            continue
+
+        items = rss_items(xml_text)[:MAX_ITEMS_PER_QUERY]
+        scanned += len(items)
+
+        for it in items:
+            url = it.get("url") or ""
+            if not url:
+                continue
+            if url in seen_urls:
+                continue
+
+            combined = f'{it.get("title","")} {it.get("summary","")} {it.get("source","")} {it.get("source_url","")} {it.get("url","")}'
+            if not looks_like_kent(combined):
+                continue
+            if not has_topic_signal(combined):
+                continue
+
+            if it.get("published"):
+                try:
+                    dt = datetime.strptime(it["published"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                    if dt < cutoff:
+                        continue
+                except Exception:
+                    pass
+
+            it["area"] = find_area(combined)
+            it["label"] = classify_label(combined)
+            it["found_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+            collected.append(it)
+            seen_urls.add(url)
+
+    dedup = {}
+    for it in collected:
+        dedup[it["url"]] = it
+
+    out = list(dedup.values())
+    out.sort(key=lambda x: x.get("published") or "0000-00-00", reverse=True)
+    out = out[:MAX_ITEMS]
+
+    state["seen_urls"] = list(seen_urls)[:60000]
+    save_json(STATE_FILE, state)
+    save_json(OUT_FILE, out)
+
+    print("Queries:", len(queries))
+    print("Scanned items:", scanned)
+    print("Saved items:", len(out))
+
+if __name__ == "__main__":
+    main()

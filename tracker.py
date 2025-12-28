@@ -10,14 +10,14 @@ OUT_FILE = "pinknews.json"
 STATE_FILE = "pink_state.json"
 
 LOOKBACK_YEARS = 5
-MAX_ITEMS = 250
-MAX_ITEMS_PER_QUERY = 60
+MAX_ITEMS = 300
+MAX_ITEMS_PER_QUERY = 80
 
 GOOGLE_NEWS_RSS = "https://news.google.com/rss/search"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
-    "Accept": "application/rss+xml, application/xml;q=0.9, */*;q=0.8",
+    "Accept": "application/rss+xml, application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-GB,en;q=0.9",
 }
 
@@ -29,28 +29,20 @@ AREA_NAMES = [
     "Tonbridge", "Tunbridge Wells", "Whitstable",
 ]
 
-AREA_PATTERNS = [
-    (name, re.compile(r"\b" + re.escape(name.lower()) + r"\b", re.I))
-    for name in AREA_NAMES
-] + [
+AREA_PATTERNS = []
+for n in AREA_NAMES:
+    AREA_PATTERNS.append((n, re.compile(r"\b" + re.escape(n.lower()) + r"\b", re.I)))
+AREA_PATTERNS += [
     ("Herne Bay", re.compile(r"\bherne\s+bay\b", re.I)),
     ("Tunbridge Wells", re.compile(r"\btunbridge\s+wells\b", re.I)),
     ("Isle of Sheppey", re.compile(r"\bisle\s+of\s+sheppey\b", re.I)),
 ]
 
-BLOCK_TERMS = [
-    "kent state",
-    "kent state university",
-    "kent, ohio",
-    "ohio",
-    "usa",
-    "u.s.",
-    "united states",
-]
-
 TOPIC_TERMS = [
     "lgbt", "lgbtq", "lgbtq+", "lgbtqia", "lgbtqia+",
-    "gay", "lesbian", "bisexual", "trans", "transgender",
+    "queer",
+    "gay", "lesbian", "bisexual",
+    "trans", "transgender",
     "non-binary", "non binary", "nonbinary",
     "homophobic", "homophobia",
     "transphobic", "transphobia",
@@ -71,6 +63,34 @@ HATE_TERMS = [
     "homophobic", "homophobia",
     "transphobic", "transphobia",
     "biphobic", "biphobia",
+]
+
+BAD_LOCATION_PATTERNS = [
+    re.compile(r"\bkent state\b", re.I),
+    re.compile(r"\bkent state university\b", re.I),
+    re.compile(r"\bkent,\s*ohio\b", re.I),
+    re.compile(r"\bohio\b", re.I),
+    re.compile(r"\bkent,\s*wa\b", re.I),
+    re.compile(r"\bkent\s+wa\b", re.I),
+    re.compile(r"\bkent,\s*washington\b", re.I),
+    re.compile(r"\bwashington state\b", re.I),
+    re.compile(r"\bkentucky\b", re.I),
+    re.compile(r"\busa\b", re.I),
+    re.compile(r"\bunited states\b", re.I),
+]
+
+UK_SIGNAL_PATTERNS = [
+    re.compile(r"\bkent\b", re.I),
+    re.compile(r"\bkent county\b", re.I),
+    re.compile(r"\bkent police\b", re.I),
+    re.compile(r"\bengland\b", re.I),
+    re.compile(r"\buk\b", re.I),
+    re.compile(r"\bunited kingdom\b", re.I),
+    re.compile(r"\bmaidstone\b", re.I),
+    re.compile(r"\bcanterbury\b", re.I),
+    re.compile(r"\bmedway\b", re.I),
+    re.compile(r"\bthanet\b", re.I),
+    re.compile(r"\bswale\b", re.I),
 ]
 
 def load_json(path: str, fallback):
@@ -152,7 +172,7 @@ def rss_items(xml_text: str):
             "published": published,
             "source": source_name if source_name else "Google News",
             "source_url": source_url,
-            "summary": desc[:500] if desc else "",
+            "summary": desc[:650] if desc else "",
         })
     return out
 
@@ -167,15 +187,24 @@ def find_area(text: str) -> str:
             return name
     return ""
 
-def looks_like_kent(text: str) -> bool:
-    t = (text or "").lower()
-    if any(b in t for b in BLOCK_TERMS):
-        return False
-    if "kent" in t:
-        return True
-    if find_area(t):
-        return True
+def is_bad_location(text: str) -> bool:
+    for pat in BAD_LOCATION_PATTERNS:
+        if pat.search(text or ""):
+            return True
     return False
+
+def has_uk_signal(text: str) -> bool:
+    for pat in UK_SIGNAL_PATTERNS:
+        if pat.search(text or ""):
+            return True
+    return False
+
+def looks_like_kent_uk(text: str) -> bool:
+    if is_bad_location(text):
+        return False
+    if find_area(text):
+        return True
+    return has_uk_signal(text)
 
 def has_topic_signal(text: str) -> bool:
     t = (text or "").lower()
@@ -192,26 +221,33 @@ def classify_label(text: str) -> str:
     return "LGBT news"
 
 def build_queries():
-    neg = '-"Kent State" -Ohio -USA -"United States"'
-    topic_blob = '(lgbt OR lgbtq OR gay OR lesbian OR bisexual OR trans OR transgender OR "non-binary" OR homophobic OR transphobic OR "hate crime" OR pride)'
-    court_blob = '(court OR "crown court" OR magistrates OR sentenced OR "pleaded guilty" OR convicted OR charged)'
-    hate_blob = '(homophobic OR transphobic OR "hate crime" OR hatecrime)'
+    neg = '-"Kent State" -Kentucky -Ohio -USA -"United States" -Washington -("Kent, WA") -("Kent WA")'
+    topics = [
+        "lgbt", "lgbtq", "gay", "lesbian", "bisexual",
+        "trans", "transgender", '"non-binary"', "queer",
+        "homophobic", "transphobic", '"hate crime"', "pride",
+        '"gender identity"', '"sexual orientation"',
+    ]
 
     queries = []
-
-    queries.append(f'kent uk {topic_blob} {neg}')
-    queries.append(f'kent uk {hate_blob} {neg}')
-    queries.append(f'kent uk {court_blob} {hate_blob} {neg}')
-    queries.append(f'kent uk pride lgbt {neg}')
+    for term in topics:
+        queries.append(f'kent england {term} {neg}')
+        queries.append(f'kent uk {term} {neg}')
+        queries.append(f'"kent police" {term} {neg}')
 
     for area in AREA_NAMES:
-        a = f'"{area}"'
-        queries.append(f'{a} kent uk {topic_blob} {neg}')
-        queries.append(f'{a} kent uk {hate_blob} {neg}')
-        queries.append(f'{a} kent uk {court_blob} {neg}')
+        for term in topics:
+            queries.append(f'"{area}" kent {term} {neg}')
 
-    seen = set()
+    queries.append(f'"Kent" "Crown Court" homophobic {neg}')
+    queries.append(f'"Kent" "Crown Court" transphobic {neg}')
+    queries.append(f'"Kent" magistrates homophobic {neg}')
+    queries.append(f'"Kent" magistrates transphobic {neg}')
+    queries.append(f'"Kent" sentenced homophobic {neg}')
+    queries.append(f'"Kent" sentenced transphobic {neg}')
+
     out = []
+    seen = set()
     for q in queries:
         if q not in seen:
             out.append(q)
@@ -227,6 +263,7 @@ def main() -> None:
     queries = build_queries()
     collected = []
     scanned = 0
+    kept = 0
 
     for q in queries:
         xml_text = fetch_rss(q)
@@ -244,7 +281,7 @@ def main() -> None:
                 continue
 
             combined = f'{it.get("title","")} {it.get("summary","")} {it.get("source","")} {it.get("source_url","")} {it.get("url","")}'
-            if not looks_like_kent(combined):
+            if not looks_like_kent_uk(combined):
                 continue
             if not has_topic_signal(combined):
                 continue
@@ -263,6 +300,7 @@ def main() -> None:
 
             collected.append(it)
             seen_urls.add(url)
+            kept += 1
 
     dedup = {}
     for it in collected:
@@ -272,12 +310,13 @@ def main() -> None:
     out.sort(key=lambda x: x.get("published") or "0000-00-00", reverse=True)
     out = out[:MAX_ITEMS]
 
-    state["seen_urls"] = list(seen_urls)[:60000]
+    state["seen_urls"] = list(seen_urls)[:90000]
     save_json(STATE_FILE, state)
     save_json(OUT_FILE, out)
 
     print("Queries:", len(queries))
     print("Scanned items:", scanned)
+    print("Kept items this run:", kept)
     print("Saved items:", len(out))
 
 if __name__ == "__main__":

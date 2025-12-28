@@ -1,4 +1,4 @@
-name: Update PinkNews feed
+name: Update LGBT Kent feed
 
 on:
   schedule:
@@ -34,6 +34,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No changes"
           else
-            git commit -m "Update PinkNews feed"
+            git commit -m "Update LGBT Kent feed"
             git push
           fi

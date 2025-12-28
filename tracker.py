@@ -1,5 +1,7 @@
 import json
+import os
 import re
+import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
@@ -9,9 +11,12 @@ import requests
 OUT_FILE = "pinknews.json"
 STATE_FILE = "pink_state.json"
 
-LOOKBACK_YEARS = 1
+LOOKBACK_YEARS = 5
 MAX_ITEMS = 300
 MAX_ITEMS_PER_QUERY = 80
+
+MAX_QUERIES_PER_RUN = int(os.getenv("MAX_QUERIES_PER_RUN", "40"))
+TIME_BUDGET_SECONDS = int(os.getenv("TIME_BUDGET_SECONDS", "120"))
 
 GOOGLE_NEWS_RSS = "https://news.google.com/rss/search"
 
@@ -81,17 +86,16 @@ BAD_LOCATION_PATTERNS = [
 
 UK_SIGNAL_PATTERNS = [
     re.compile(r"\bkent\b", re.I),
-    re.compile(r"\bkent county\b", re.I),
-    re.compile(r"\bkent police\b", re.I),
     re.compile(r"\bengland\b", re.I),
     re.compile(r"\buk\b", re.I),
     re.compile(r"\bunited kingdom\b", re.I),
-    re.compile(r"\bmaidstone\b", re.I),
-    re.compile(r"\bcanterbury\b", re.I),
-    re.compile(r"\bmedway\b", re.I),
-    re.compile(r"\bthanet\b", re.I),
-    re.compile(r"\bswale\b", re.I),
+    re.compile(r"\bkent police\b", re.I),
+    re.compile(r"\bkentonline\.co\.uk\b", re.I),
+    re.compile(r"\bkentlive\.news\b", re.I),
 ]
+
+SESSION = requests.Session()
+SESSION.headers.update(HEADERS)
 
 def load_json(path: str, fallback):
     try:
@@ -133,23 +137,14 @@ def build_google_rss_url(q: str) -> str:
 
 def fetch_rss(q: str):
     url = build_google_rss_url(q)
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=30)
-        if r.status_code >= 400:
-            print("RSS fetch failed", r.status_code, "for query:", q)
-            return None
-        return r.text
-    except Exception as e:
-        print("RSS fetch error", str(e), "for query:", q)
-        return None
+    r = SESSION.get(url, timeout=20)
+    if r.status_code >= 400:
+        raise RuntimeError("HTTP " + str(r.status_code))
+    return r.text
 
 def rss_items(xml_text: str):
     out = []
-    try:
-        root = ET.fromstring(xml_text)
-    except Exception:
-        return out
-
+    root = ET.fromstring(xml_text)
     for item in root.findall(".//item"):
         title = (item.findtext("title") or "").strip()
         link = (item.findtext("link") or "").strip()
@@ -222,29 +217,15 @@ def classify_label(text: str) -> str:
 
 def build_queries():
     neg = '-"Kent State" -Kentucky -Ohio -USA -"United States" -Washington -("Kent, WA") -("Kent WA")'
-    topics = [
-        "lgbt", "lgbtq", "gay", "lesbian", "bisexual",
-        "trans", "transgender", '"non-binary"', "queer",
-        "homophobic", "transphobic", '"hate crime"', "pride",
-        '"gender identity"', '"sexual orientation"',
+    queries = [
+        f'kent england (lgbt OR lgbtq OR gay OR lesbian OR bisexual OR trans OR transgender OR "non-binary" OR queer OR pride) {neg}',
+        f'kent england (homophobic OR transphobic OR "hate crime" OR hatecrime) {neg}',
+        f'kent england (court OR "crown court" OR magistrates OR sentenced OR convicted OR charged) (homophobic OR transphobic OR "hate crime") {neg}',
+        f'(Canterbury OR Maidstone OR Medway OR Thanet OR Swale OR Dartford OR Gravesend OR Dover OR Ashford OR Folkestone) (lgbt OR lgbtq OR gay OR lesbian OR trans OR transgender OR "non-binary" OR pride OR homophobic OR transphobic OR "hate crime") {neg}',
     ]
 
-    queries = []
-    for term in topics:
-        queries.append(f'kent england {term} {neg}')
-        queries.append(f'kent uk {term} {neg}')
-        queries.append(f'"kent police" {term} {neg}')
-
     for area in AREA_NAMES:
-        for term in topics:
-            queries.append(f'"{area}" kent {term} {neg}')
-
-    queries.append(f'"Kent" "Crown Court" homophobic {neg}')
-    queries.append(f'"Kent" "Crown Court" transphobic {neg}')
-    queries.append(f'"Kent" magistrates homophobic {neg}')
-    queries.append(f'"Kent" magistrates transphobic {neg}')
-    queries.append(f'"Kent" sentenced homophobic {neg}')
-    queries.append(f'"Kent" sentenced transphobic {neg}')
+        queries.append(f'"{area}" kent (lgbt OR lgbtq OR gay OR lesbian OR trans OR transgender OR "non-binary" OR pride OR homophobic OR transphobic OR "hate crime") {neg}')
 
     out = []
     seen = set()
@@ -255,6 +236,7 @@ def build_queries():
     return out
 
 def main() -> None:
+    start = time.time()
     cutoff = datetime.now(timezone.utc) - timedelta(days=365 * LOOKBACK_YEARS)
 
     state = load_json(STATE_FILE, {"seen_urls": []})
@@ -265,19 +247,28 @@ def main() -> None:
     scanned = 0
     kept = 0
 
-    for q in queries:
-        xml_text = fetch_rss(q)
-        if not xml_text:
+    print("Queries total:", len(queries), flush=True)
+
+    for idx, q in enumerate(queries, start=1):
+        if idx > MAX_QUERIES_PER_RUN:
+            print("Stop: query limit reached", flush=True)
+            break
+        if (time.time() - start) > TIME_BUDGET_SECONDS:
+            print("Stop: time budget reached", flush=True)
+            break
+
+        try:
+            xml_text = fetch_rss(q)
+            items = rss_items(xml_text)[:MAX_ITEMS_PER_QUERY]
+        except Exception as e:
+            print("Query failed", idx, ":", str(e), flush=True)
             continue
 
-        items = rss_items(xml_text)[:MAX_ITEMS_PER_QUERY]
         scanned += len(items)
 
         for it in items:
             url = it.get("url") or ""
-            if not url:
-                continue
-            if url in seen_urls:
+            if not url or url in seen_urls:
                 continue
 
             combined = f'{it.get("title","")} {it.get("summary","")} {it.get("source","")} {it.get("source_url","")} {it.get("url","")}'
@@ -302,6 +293,8 @@ def main() -> None:
             seen_urls.add(url)
             kept += 1
 
+        print("Progress", idx, "/", len(queries), "scanned", scanned, "kept", kept, flush=True)
+
     dedup = {}
     for it in collected:
         dedup[it["url"]] = it
@@ -314,10 +307,7 @@ def main() -> None:
     save_json(STATE_FILE, state)
     save_json(OUT_FILE, out)
 
-    print("Queries:", len(queries))
-    print("Scanned items:", scanned)
-    print("Kept items this run:", kept)
-    print("Saved items:", len(out))
+    print("Saved items:", len(out), flush=True)
 
 if __name__ == "__main__":
     main()

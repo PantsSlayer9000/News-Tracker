@@ -1,5 +1,4 @@
 import json
-import os
 import re
 import time
 import xml.etree.ElementTree as ET
@@ -11,37 +10,24 @@ import requests
 OUT_FILE = "pinknews.json"
 STATE_FILE = "pink_state.json"
 
-LOOKBACK_YEARS = 5
-MAX_ITEMS = 300
-MAX_ITEMS_PER_QUERY = 80
+BBC_TOPIC_URL = "https://www.bbc.co.uk/news/topics/cp7r8vgln2wt"
 
-MAX_QUERIES_PER_RUN = int(os.getenv("MAX_QUERIES_PER_RUN", "40"))
-TIME_BUDGET_SECONDS = int(os.getenv("TIME_BUDGET_SECONDS", "120"))
+LOOKBACK_YEARS = 5
+MAX_ITEMS_TOTAL = 300
+MAX_ITEMS_PER_FEED = 120
 
 GOOGLE_NEWS_RSS = "https://news.google.com/rss/search"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
-    "Accept": "application/rss+xml, application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-GB,en;q=0.9",
 }
 
-AREA_NAMES = [
-    "Ashford", "Broadstairs", "Canterbury", "Chatham", "Dartford", "Deal", "Dover",
-    "Faversham", "Folkestone", "Gillingham", "Gravesend", "Herne Bay", "Hythe",
-    "Isle of Sheppey", "Maidstone", "Margate", "Medway", "Ramsgate", "Rochester",
-    "Sevenoaks", "Sheerness", "Sheppey", "Sittingbourne", "Swale", "Thanet",
-    "Tonbridge", "Tunbridge Wells", "Whitstable",
-]
+PINKNEWS_DOMAIN = "pinknews.co.uk"
+BBC_DOMAIN = "www.bbc.co.uk"
 
-AREA_PATTERNS = []
-for n in AREA_NAMES:
-    AREA_PATTERNS.append((n, re.compile(r"\b" + re.escape(n.lower()) + r"\b", re.I)))
-AREA_PATTERNS += [
-    ("Herne Bay", re.compile(r"\bherne\s+bay\b", re.I)),
-    ("Tunbridge Wells", re.compile(r"\btunbridge\s+wells\b", re.I)),
-    ("Isle of Sheppey", re.compile(r"\bisle\s+of\s+sheppey\b", re.I)),
-]
+SESSION = requests.Session()
+SESSION.headers.update(HEADERS)
 
 TOPIC_TERMS = [
     "lgbt", "lgbtq", "lgbtq+", "lgbtqia", "lgbtqia+",
@@ -56,46 +42,6 @@ TOPIC_TERMS = [
     "sexual orientation", "gender identity",
     "pride",
 ]
-
-COURT_TERMS = [
-    "court", "crown court", "magistrates", "sentenced", "sentence",
-    "pleaded guilty", "pleaded", "charged", "convicted", "judge",
-    "hearing", "trial", "appeal", "prosecuted",
-]
-
-HATE_TERMS = [
-    "hate crime", "hate-crime", "hatecrime",
-    "homophobic", "homophobia",
-    "transphobic", "transphobia",
-    "biphobic", "biphobia",
-]
-
-BAD_LOCATION_PATTERNS = [
-    re.compile(r"\bkent state\b", re.I),
-    re.compile(r"\bkent state university\b", re.I),
-    re.compile(r"\bkent,\s*ohio\b", re.I),
-    re.compile(r"\bohio\b", re.I),
-    re.compile(r"\bkent,\s*wa\b", re.I),
-    re.compile(r"\bkent\s+wa\b", re.I),
-    re.compile(r"\bkent,\s*washington\b", re.I),
-    re.compile(r"\bwashington state\b", re.I),
-    re.compile(r"\bkentucky\b", re.I),
-    re.compile(r"\busa\b", re.I),
-    re.compile(r"\bunited states\b", re.I),
-]
-
-UK_SIGNAL_PATTERNS = [
-    re.compile(r"\bkent\b", re.I),
-    re.compile(r"\bengland\b", re.I),
-    re.compile(r"\buk\b", re.I),
-    re.compile(r"\bunited kingdom\b", re.I),
-    re.compile(r"\bkent police\b", re.I),
-    re.compile(r"\bkentonline\.co\.uk\b", re.I),
-    re.compile(r"\bkentlive\.news\b", re.I),
-]
-
-SESSION = requests.Session()
-SESSION.headers.update(HEADERS)
 
 def load_json(path: str, fallback):
     try:
@@ -131,20 +77,37 @@ def parse_rss_date(pub_date: str):
             continue
     return None
 
-def build_google_rss_url(q: str) -> str:
+def iso_date(dt: datetime | None) -> str | None:
+    if not dt:
+        return None
+    return dt.date().isoformat()
+
+def within_lookback(published_iso: str | None, cutoff: datetime) -> bool:
+    if not published_iso:
+        return True
+    try:
+        dt = datetime.strptime(published_iso, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        return dt >= cutoff
+    except Exception:
+        return True
+
+def has_topic_signal(text: str) -> bool:
+    t = (text or "").lower()
+    return any(k in t for k in TOPIC_TERMS)
+
+def build_google_news_rss_url(q: str) -> str:
     params = {"q": q, "hl": "en-GB", "gl": "GB", "ceid": "GB:en"}
     return GOOGLE_NEWS_RSS + "?" + urlencode(params)
 
-def fetch_rss(q: str):
-    url = build_google_rss_url(q)
-    r = SESSION.get(url, timeout=20)
-    if r.status_code >= 400:
-        raise RuntimeError("HTTP " + str(r.status_code))
+def fetch_text(url: str, timeout: int = 25) -> str:
+    r = SESSION.get(url, timeout=timeout)
+    r.raise_for_status()
     return r.text
 
-def rss_items(xml_text: str):
+def parse_google_news_rss(xml_text: str):
     out = []
     root = ET.fromstring(xml_text)
+
     for item in root.findall(".//item"):
         title = (item.findtext("title") or "").strip()
         link = (item.findtext("link") or "").strip()
@@ -159,155 +122,220 @@ def rss_items(xml_text: str):
             source_url = (source_elem.attrib.get("url") or "").strip()
 
         dt = parse_rss_date(pub_date)
-        published = dt.date().isoformat() if dt else None
-
         out.append({
             "title": title,
             "url": link,
-            "published": published,
-            "source": source_name if source_name else "Google News",
-            "source_url": source_url,
+            "published": iso_date(dt),
+            "source": source_name if source_name else "PinkNews",
+            "source_url": source_url if source_url else "https://www.pinknews.co.uk",
             "summary": desc[:650] if desc else "",
         })
+
     return out
 
-def find_area(text: str) -> str:
-    t = (text or "").lower()
-    if "sheppey" in t:
-        if "isle of sheppey" in t:
-            return "Isle of Sheppey"
-        return "Sheppey"
-    for name, pat in AREA_PATTERNS:
-        if pat.search(t):
-            return name
-    return ""
-
-def is_bad_location(text: str) -> bool:
-    for pat in BAD_LOCATION_PATTERNS:
-        if pat.search(text or ""):
-            return True
-    return False
-
-def has_uk_signal(text: str) -> bool:
-    for pat in UK_SIGNAL_PATTERNS:
-        if pat.search(text or ""):
-            return True
-    return False
-
-def looks_like_kent_uk(text: str) -> bool:
-    if is_bad_location(text):
-        return False
-    if find_area(text):
-        return True
-    return has_uk_signal(text)
-
-def has_topic_signal(text: str) -> bool:
-    t = (text or "").lower()
-    return any(k in t for k in TOPIC_TERMS)
-
-def classify_label(text: str) -> str:
-    t = (text or "").lower()
-    if any(k in t for k in HATE_TERMS):
-        return "Hate crime update"
-    if any(k in t for k in COURT_TERMS):
-        return "Court update"
-    if "pride" in t:
-        return "Pride update"
-    return "LGBT news"
-
-def build_queries():
-    neg = '-"Kent State" -Kentucky -Ohio -USA -"United States" -Washington -("Kent, WA") -("Kent WA")'
+def fetch_pinknews_only(cutoff: datetime):
     queries = [
-        f'kent england (lgbt OR lgbtq OR gay OR lesbian OR bisexual OR trans OR transgender OR "non-binary" OR queer OR pride) {neg}',
-        f'kent england (homophobic OR transphobic OR "hate crime" OR hatecrime) {neg}',
-        f'kent england (court OR "crown court" OR magistrates OR sentenced OR convicted OR charged) (homophobic OR transphobic OR "hate crime") {neg}',
-        f'(Canterbury OR Maidstone OR Medway OR Thanet OR Swale OR Dartford OR Gravesend OR Dover OR Ashford OR Folkestone) (lgbt OR lgbtq OR gay OR lesbian OR trans OR transgender OR "non-binary" OR pride OR homophobic OR transphobic OR "hate crime") {neg}',
+        f"site:{PINKNEWS_DOMAIN} (lgbt OR lgbtq OR gay OR lesbian OR bisexual OR trans OR transgender OR queer OR pride OR homophobic OR transphobic OR \"hate crime\")",
+        f"site:{PINKNEWS_DOMAIN} (kent OR canterbury OR maidstone OR medway OR thanet OR swale OR sheerness OR sittingbourne OR rochester OR chatham OR dartford OR gravesend OR ashford OR folkestone OR dover) (lgbt OR lgbtq OR gay OR lesbian OR trans OR transgender OR queer OR pride OR homophobic OR transphobic OR \"hate crime\")",
+        f"site:{PINKNEWS_DOMAIN} (court OR \"crown court\" OR magistrates OR sentenced OR convicted OR charged) (homophobic OR transphobic OR \"hate crime\")",
     ]
 
-    for area in AREA_NAMES:
-        queries.append(f'"{area}" kent (lgbt OR lgbtq OR gay OR lesbian OR trans OR transgender OR "non-binary" OR pride OR homophobic OR transphobic OR "hate crime") {neg}')
-
-    out = []
-    seen = set()
+    items = []
     for q in queries:
-        if q not in seen:
-            out.append(q)
-            seen.add(q)
-    return out
+        url = build_google_news_rss_url(q)
+        try:
+            xml_text = fetch_text(url, timeout=25)
+            batch = parse_google_news_rss(xml_text)
+        except Exception as e:
+            print("PinkNews query failed:", str(e), flush=True)
+            continue
 
-def main() -> None:
-    start = time.time()
+        for it in batch[:MAX_ITEMS_PER_FEED]:
+            if PINKNEWS_DOMAIN not in (it.get("url") or ""):
+                continue
+            combined = f'{it.get("title","")} {it.get("summary","")}'
+            if not has_topic_signal(combined):
+                continue
+            if not within_lookback(it.get("published"), cutoff):
+                continue
+
+            it["source"] = "PinkNews"
+            it["source_url"] = "https://www.pinknews.co.uk"
+            it["label"] = "PinkNews"
+            items.append(it)
+
+    return items
+
+def parse_bbc_topic_jsonld(html: str):
+    scripts = re.findall(r'<script[^>]+type="application/ld\+json"[^>]*>(.*?)</script>', html, flags=re.I | re.S)
+    candidates = []
+
+    for s in scripts:
+        s = s.strip()
+        if not s:
+            continue
+        try:
+            data = json.loads(s)
+        except Exception:
+            continue
+
+        stack = [data]
+        while stack:
+            obj = stack.pop()
+            if isinstance(obj, dict):
+                if "itemListElement" in obj and isinstance(obj["itemListElement"], list):
+                    for el in obj["itemListElement"]:
+                        if isinstance(el, dict):
+                            item = el.get("item")
+                            if isinstance(item, dict):
+                                url = item.get("url") or ""
+                                name = item.get("name") or ""
+                                date_published = item.get("datePublished") or item.get("dateCreated") or item.get("dateModified") or ""
+                                candidates.append((url, name, date_published))
+                for v in obj.values():
+                    if isinstance(v, (dict, list)):
+                        stack.append(v)
+            elif isinstance(obj, list):
+                for v in obj:
+                    if isinstance(v, (dict, list)):
+                        stack.append(v)
+
+    return candidates
+
+def normalise_bbc_date(s: str) -> str | None:
+    if not s:
+        return None
+    s = s.strip().replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.date().isoformat()
+    except Exception:
+        m = re.match(r"^(\d{4}-\d{2}-\d{2})", s)
+        if m:
+            return m.group(1)
+    return None
+
+def fetch_bbc_topic_only(cutoff: datetime):
+    try:
+        html = fetch_text(BBC_TOPIC_URL, timeout=30)
+    except Exception as e:
+        print("BBC topic fetch failed:", str(e), flush=True)
+        return []
+
+    items = []
+    seen = set()
+
+    for url, name, date_published in parse_bbc_topic_jsonld(html):
+        if not url or url in seen:
+            continue
+        seen.add(url)
+
+        if not url.startswith("http"):
+            continue
+        if (BBC_DOMAIN + "/news/") not in url:
+            continue
+
+        published = normalise_bbc_date(date_published)
+        if not within_lookback(published, cutoff):
+            continue
+
+        title = strip_html(name) if name else "BBC News"
+        combined = title.lower()
+        if not has_topic_signal(combined):
+            pass
+
+        items.append({
+            "title": title,
+            "url": url,
+            "published": published,
+            "source": "BBC News",
+            "source_url": "https://www.bbc.co.uk/news",
+            "summary": "",
+            "label": "BBC topic",
+        })
+
+        if len(items) >= MAX_ITEMS_PER_FEED:
+            break
+
+    if items:
+        return items
+
+    hrefs = set(re.findall(r'href="(/news/[^"]+)"', html, flags=re.I))
+    for h in list(hrefs)[:200]:
+        if h.startswith("/news/topics/"):
+            continue
+        url = "https://www.bbc.co.uk" + h
+        if url in seen:
+            continue
+        seen.add(url)
+        items.append({
+            "title": "BBC News",
+            "url": url,
+            "published": None,
+            "source": "BBC News",
+            "source_url": "https://www.bbc.co.uk/news",
+            "summary": "",
+            "label": "BBC topic",
+        })
+        if len(items) >= 80:
+            break
+
+    return items
+
+def dedup_sort(items):
+    by_url = {}
+    for it in items:
+        u = (it.get("url") or "").strip()
+        if not u:
+            continue
+        by_url[u] = it
+
+    out = list(by_url.values())
+    out.sort(key=lambda x: x.get("published") or "0000-00-00", reverse=True)
+    return out[:MAX_ITEMS_TOTAL]
+
+def main():
     cutoff = datetime.now(timezone.utc) - timedelta(days=365 * LOOKBACK_YEARS)
 
     state = load_json(STATE_FILE, {"seen_urls": []})
     seen_urls = set(state.get("seen_urls", []))
 
-    queries = build_queries()
-    collected = []
-    scanned = 0
-    kept = 0
+    start = time.time()
 
-    print("Queries total:", len(queries), flush=True)
+    items = []
+    items += fetch_pinknews_only(cutoff)
+    items += fetch_bbc_topic_only(cutoff)
 
-    for idx, q in enumerate(queries, start=1):
-        if idx > MAX_QUERIES_PER_RUN:
-            print("Stop: query limit reached", flush=True)
-            break
-        if (time.time() - start) > TIME_BUDGET_SECONDS:
-            print("Stop: time budget reached", flush=True)
-            break
-
-        try:
-            xml_text = fetch_rss(q)
-            items = rss_items(xml_text)[:MAX_ITEMS_PER_QUERY]
-        except Exception as e:
-            print("Query failed", idx, ":", str(e), flush=True)
+    cleaned = []
+    for it in items:
+        url = it.get("url") or ""
+        if not url:
             continue
 
-        scanned += len(items)
+        if PINKNEWS_DOMAIN in url:
+            pass
+        elif url.startswith("https://www.bbc.co.uk/news/"):
+            pass
+        else:
+            continue
 
-        for it in items:
-            url = it.get("url") or ""
-            if not url or url in seen_urls:
-                continue
+        if url in seen_urls:
+            continue
 
-            combined = f'{it.get("title","")} {it.get("summary","")} {it.get("source","")} {it.get("source_url","")} {it.get("url","")}'
-            if not looks_like_kent_uk(combined):
-                continue
-            if not has_topic_signal(combined):
-                continue
+        it["found_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        cleaned.append(it)
+        seen_urls.add(url)
 
-            if it.get("published"):
-                try:
-                    dt = datetime.strptime(it["published"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
-                    if dt < cutoff:
-                        continue
-                except Exception:
-                    pass
+    out = dedup_sort(cleaned)
 
-            it["area"] = find_area(combined)
-            it["label"] = classify_label(combined)
-            it["found_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-            collected.append(it)
-            seen_urls.add(url)
-            kept += 1
-
-        print("Progress", idx, "/", len(queries), "scanned", scanned, "kept", kept, flush=True)
-
-    dedup = {}
-    for it in collected:
-        dedup[it["url"]] = it
-
-    out = list(dedup.values())
-    out.sort(key=lambda x: x.get("published") or "0000-00-00", reverse=True)
-    out = out[:MAX_ITEMS]
-
-    state["seen_urls"] = list(seen_urls)[:90000]
+    state["seen_urls"] = list(seen_urls)[:100000]
     save_json(STATE_FILE, state)
     save_json(OUT_FILE, out)
 
     print("Saved items:", len(out), flush=True)
+    print("Run seconds:", int(time.time() - start), flush=True)
 
 if __name__ == "__main__":
     main()

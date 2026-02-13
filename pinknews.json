@@ -1,22 +1,12 @@
 [
   {
     "title": "BBC News",
-    "url": "https://www.bbc.co.uk/news/articles/cd70nlxz25wo",
+    "url": "https://www.bbc.co.uk/news/articles/c2lrd0ey074o",
     "published": null,
     "source": "BBC News",
     "source_url": "https://www.bbc.co.uk/news",
     "summary": "",
     "label": "BBC topic",
-    "found_at": "2026-02-13T12:44:12Z"
-  },
-  {
-    "title": "BBC News",
-    "url": "https://www.bbc.co.uk/news/england/berkshire",
-    "published": null,
-    "source": "BBC News",
-    "source_url": "https://www.bbc.co.uk/news",
-    "summary": "",
-    "label": "BBC topic",
-    "found_at": "2026-02-13T12:44:12Z"
+    "found_at": "2026-02-13T18:38:51Z"
   }
 ]

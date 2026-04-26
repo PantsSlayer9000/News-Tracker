@@ -1,1 +1,12 @@
-[]
+[
+  {
+    "title": "BBC News",
+    "url": "https://www.bbc.co.uk/news/articles/c14548m75vlo",
+    "published": null,
+    "source": "BBC News",
+    "source_url": "https://www.bbc.co.uk/news",
+    "summary": "",
+    "label": "BBC topic",
+    "found_at": "2026-04-26T18:42:33Z"
+  }
+]

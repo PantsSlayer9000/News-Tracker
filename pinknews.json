@@ -1,1 +1,32 @@
-[]
+[
+  {
+    "title": "BBC News",
+    "url": "https://www.bbc.co.uk/news/articles/c62xqv0rzv6o",
+    "published": null,
+    "source": "BBC News",
+    "source_url": "https://www.bbc.co.uk/news",
+    "summary": "",
+    "label": "BBC topic",
+    "found_at": "2026-06-02T10:11:39Z"
+  },
+  {
+    "title": "BBC News",
+    "url": "https://www.bbc.co.uk/news/articles/c4g913y5gneo",
+    "published": null,
+    "source": "BBC News",
+    "source_url": "https://www.bbc.co.uk/news",
+    "summary": "",
+    "label": "BBC topic",
+    "found_at": "2026-06-02T10:11:39Z"
+  },
+  {
+    "title": "BBC News",
+    "url": "https://www.bbc.co.uk/news/england/suffolk",
+    "published": null,
+    "source": "BBC News",
+    "source_url": "https://www.bbc.co.uk/news",
+    "summary": "",
+    "label": "BBC topic",
+    "found_at": "2026-06-02T10:11:39Z"
+  }
+]

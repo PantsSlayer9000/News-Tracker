@@ -1,12 +1,22 @@
 [
   {
     "title": "BBC News",
-    "url": "https://www.bbc.co.uk/news/articles/cvgz0e97rzzo",
+    "url": "https://www.bbc.co.uk/news/articles/cq8pl532d7lo",
     "published": null,
     "source": "BBC News",
     "source_url": "https://www.bbc.co.uk/news",
     "summary": "",
     "label": "BBC topic",
-    "found_at": "2026-06-03T10:47:48Z"
+    "found_at": "2026-06-03T16:25:38Z"
+  },
+  {
+    "title": "BBC News",
+    "url": "https://www.bbc.co.uk/news/england/essex",
+    "published": null,
+    "source": "BBC News",
+    "source_url": "https://www.bbc.co.uk/news",
+    "summary": "",
+    "label": "BBC topic",
+    "found_at": "2026-06-03T16:25:38Z"
   }
 ]

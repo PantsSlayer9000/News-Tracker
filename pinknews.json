@@ -1,22 +1,12 @@
 [
   {
     "title": "BBC News",
-    "url": "https://www.bbc.co.uk/news/articles/c4gyd78rxv0o",
+    "url": "https://www.bbc.co.uk/news/articles/cp8r8l84p8yo",
     "published": null,
     "source": "BBC News",
     "source_url": "https://www.bbc.co.uk/news",
     "summary": "",
     "label": "BBC topic",
-    "found_at": "2026-07-14T07:52:00Z"
-  },
-  {
-    "title": "BBC News",
-    "url": "https://www.bbc.co.uk/news/articles/c77y2g6g77jo",
-    "published": null,
-    "source": "BBC News",
-    "source_url": "https://www.bbc.co.uk/news",
-    "summary": "",
-    "label": "BBC topic",
-    "found_at": "2026-07-14T07:52:00Z"
+    "found_at": "2026-07-14T13:19:06Z"
   }
 ]
